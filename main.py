@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from datetime import datetime
 from dotenv import load_dotenv
+import mysql.connector
+
 
 load_dotenv()
 
@@ -142,6 +144,52 @@ def get_products(db: Session = Depends(get_db), skip: int = 0, limit: int = 100)
     except Exception as e:
         logger.error(f"Error fetching products list: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+    
+@app.put("/product/{product_id}", response_model=ProductResponse)
+def update_product(
+    product_id: int, 
+    product_update: ProductCreate,  # Reuse or create ProductUpdate
+    db: Session = Depends(get_db)
+):
+    logger.info(f"Updating product ID: {product_id}")
+    
+    # Get existing product
+    db_product = db.get(Products, product_id)
+    if not db_product:
+        logger.warning(f"Product not found for update: {product_id}")
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Check SKU conflict (if changed)
+    if product_update.SKU != db_product.SKU:
+        existing_sku = db.execute(
+            select(Products).where(Products.SKU == product_update.SKU)
+        ).scalar_one_or_none()
+        if existing_sku:
+            raise HTTPException(status_code=400, detail="SKU already exists")
+    
+    # Update fields
+    update_data = product_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_product, field, value)
+    
+    db.commit()
+    db.refresh(db_product)
+    logger.info(f"Product updated successfully: ID={db_product.id}")
+    return db_product
+
+@app.delete("/product/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(product_id: int, db: Session = Depends(get_db)):
+    logger.info(f"Deleting product ID: {product_id}")
+    
+    db_product = db.get(Products, product_id)
+    if not db_product:
+        logger.warning(f"Product not found for delete: {product_id}")
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    db.delete(db_product)
+    db.commit()
+    logger.info(f"Product deleted successfully: ID={product_id}")
+    return None  # 204 No Content
 
 @app.get("/health")
 def health_check():
